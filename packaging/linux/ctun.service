@@ -1,13 +1,14 @@
 # User-level systemd unit: keeps the ctun gateway tunnel up across
 # reboots and restarts the daemon (and with it the ngrok agent) if the
-# process ever dies. Install with:
+# process ever dies. The ctun CLI detects unit ownership via the
+# daemon's cgroup and routes `ctun shutdown`, `ctun restart` and
+# `ctun up` through systemctl automatically, so both manage the same
+# daemon. Install with:
 #   cp packaging/linux/ctun.service ~/.config/systemd/user/
 #   systemctl --user daemon-reload
 #   systemctl --user enable --now ctun
 # To start at boot without an active login session, also run:
 #   sudo loginctl enable-linger $USER
-# Note: with Restart=always the unit owns the daemon lifecycle;
-# `ctun shutdown` is superseded by `systemctl --user stop ctun`.
 
 [Unit]
 Description=ctun MCP gateway daemon

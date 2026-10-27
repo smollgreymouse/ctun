@@ -12,6 +12,7 @@ from .doctor import print_diagnostics
 from .ngrok import NgrokError, ngrok_version
 from .process import (
     daemon_running,
+    daemon_service_unit,
     ensure_daemon,
     pid_alive,
     read_log_tail,
@@ -124,7 +125,13 @@ def cmd_status(args: argparse.Namespace) -> int:
     config = load_config()
     daemon_pid = runtime.get("daemon_pid")
     ngrok_pid = runtime.get("ngrok_pid")
-    print(f"daemon: {'running' if pid_alive(daemon_pid) else 'stopped'}" + (f" (pid {daemon_pid})" if daemon_pid else ""))
+    unit = daemon_service_unit(daemon_pid)
+    suffix = ""
+    if daemon_pid:
+        suffix = f" (pid {daemon_pid}" + (f", managed by {unit})" if unit else ")")
+    elif unit:
+        suffix = f" (managed by {unit})"
+    print(f"daemon: {'running' if pid_alive(daemon_pid) else 'stopped'}{suffix}")
     print(f"ngrok:  {'running' if pid_alive(ngrok_pid) else 'stopped'}" + (f" (pid {ngrok_pid})" if ngrok_pid else ""))
     print(f"local:  http://{config['host']}:{config['port']}{'/' + str(config['endpoint_token']) + '/mcp'}")
     public = runtime.get("public_url") or config.get("public_url")
