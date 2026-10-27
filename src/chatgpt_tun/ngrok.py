@@ -70,10 +70,13 @@ def start_ngrok(config: dict[str, Any]) -> subprocess.Popen[str]:
 
 
 def discover_public_url(timeout: float = 20.0, api_url: str = "http://127.0.0.1:4040/api/tunnels") -> str | None:
+    # The agent API is loopback-only: system or environment proxies (macOS
+    # reads them from System Configuration as well) must never intercept it.
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
-            with urllib.request.urlopen(api_url, timeout=1.0) as response:
+            with opener.open(api_url, timeout=1.0) as response:
                 payload = json.loads(response.read().decode("utf-8"))
             for tunnel in payload.get("tunnels", []):
                 public_url = str(tunnel.get("public_url", ""))

@@ -16,6 +16,7 @@ from .state import (
     clear_runtime,
     connector_url,
     load_config,
+    load_runtime,
     normalize_public_url,
     update_config,
     update_runtime,
@@ -23,6 +24,7 @@ from .state import (
 )
 
 NGROK_POLL_SECONDS = 2.0
+NGROK_REDISCOVER_SECONDS = 10.0
 NGROK_RESTART_BACKOFF_MAX = 30.0
 
 
@@ -122,15 +124,22 @@ def _supervise_ngrok(config: dict[str, Any], holder: dict[str, Any]) -> None:
     reconnects to the same reserved domain); this loop covers the case
     the agent cannot survive on its own — its process dying. Without it
     the tunnel would stay down forever while the MCP server keeps
-    claiming everything is fine. The holder dict carries the current
-    process so the daemon cleanup always stops the live one.
+    claiming everything is fine. While the tunnel is not ready the loop
+    also retries discovery: a slow agent API (cold machine, network
+    still settling) must not leave the tunnel unreported forever. The
+    holder dict carries the current process so the daemon cleanup
+    always stops the live one.
     """
     _discover_tunnel(holder["process"], config)
+    next_discovery = time.monotonic() + NGROK_REDISCOVER_SECONDS
     backoff = 1.0
     while True:
         process = holder["process"]
         if process is None or process.poll() is None:
             time.sleep(NGROK_POLL_SECONDS)
+            if not load_runtime().get("ngrok_ready") and time.monotonic() >= next_discovery:
+                _discover_tunnel(process, config)
+                next_discovery = time.monotonic() + NGROK_REDISCOVER_SECONDS
             continue
 
         _mark_tunnel_down(process)
@@ -148,6 +157,7 @@ def _supervise_ngrok(config: dict[str, Any], holder: dict[str, Any]) -> None:
             )
         )
         _discover_tunnel(replacement, config)
+        next_discovery = time.monotonic() + NGROK_REDISCOVER_SECONDS
         backoff = 1.0
 
 
