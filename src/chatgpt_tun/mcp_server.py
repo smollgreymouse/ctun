@@ -51,7 +51,11 @@ def build_server() -> MCPServer:
         "chatgpt-tun",
         instructions=(
             "A local multi-project workspace gateway. Every file or command tool requires "
-            "an active project name. Call list_projects first when the intended project is unclear."
+            "an active project name. Call list_projects first when the intended project is unclear. "
+            "Blocking run_command is cut off at about 5 minutes by MCP-client and tunnel "
+            "timeouts, so any command that may run longer than ~2 minutes MUST be started "
+            "with start_command and then tracked with get_command_status and "
+            "read_command_output instead."
         ),
     )
 
@@ -118,7 +122,13 @@ def build_server() -> MCPServer:
         timeout: int = 60,
         max_output: int = 200_000,
     ) -> dict[str, Any]:
-        """Run a command without a shell inside an active project. argv is an argument vector."""
+        """Run a command without a shell inside an active project and wait for it. argv is an argument vector.
+
+        Blocking: the HTTP call stays open until the command exits, so it is
+        cut off at about 5 minutes (MCP client read timeout; tunnel idle
+        timeout is the same). Use this only for commands that finish quickly;
+        start anything longer with start_command instead.
+        """
         return workspace_run_command(project, argv, cwd, timeout, max_output)
 
     @mcp.tool(annotations=COMMAND)
@@ -126,12 +136,26 @@ def build_server() -> MCPServer:
         project: str, argv: list[str], cwd: str = ".", timeout: int = 3600,
         request_id: str | None = None,
     ) -> dict[str, Any]:
-        """Start a durable background process; return a job_id immediately. Use for long commands."""
+        """Start a durable background process; return a job_id immediately.
+
+        The only reliable way to run long commands: nothing holds the HTTP
+        connection open, so the ~5-minute client and tunnel timeouts never
+        apply. Survives daemon restarts. Poll get_command_status until the
+        status is no longer starting/running/cancelling, and stream output
+        with read_command_output (pass next_offset from the previous call).
+        Pass request_id to make retries of the same logical command
+        idempotent.
+        """
         return get_manager().start(project, argv, cwd, timeout, request_id)
 
     @mcp.tool(annotations=READ_ONLY)
     def get_command_status(project: str, job_id: str) -> dict[str, Any]:
-        """Check an asynchronous command by job_id without waiting for completion."""
+        """Check an asynchronous command by job_id without waiting for completion.
+
+        Poll this every few seconds after start_command; statuses: starting,
+        running, cancelling, completed, failed, cancelled, timed_out,
+        interrupted.
+        """
         return get_manager().status(project, job_id)
 
     @mcp.tool(annotations=READ_ONLY)
@@ -139,7 +163,11 @@ def build_server() -> MCPServer:
         project: str, job_id: str, stream: str = "stdout",
         offset: int = 0, max_bytes: int = 65536,
     ) -> dict[str, Any]:
-        """Read a bounded log chunk using byte offsets. Pass next_offset on subsequent calls."""
+        """Read a bounded log chunk of an asynchronous command using byte offsets.
+
+        Pass next_offset from the previous response on subsequent calls to
+        stream output while the job is still running.
+        """
         return get_manager().output(project, job_id, stream, offset, max_bytes)
 
     @mcp.tool(annotations=COMMAND)
