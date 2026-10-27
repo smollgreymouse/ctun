@@ -10,11 +10,16 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 
 import pytest
 
 from chatgpt_tun import process
 from chatgpt_tun.state import write_runtime
+
+pytestmark = pytest.mark.skipif(
+    sys.platform != "linux", reason="systemd user units are Linux-only"
+)
 
 UNIT_CGROUP = "0::/user.slice/user-1000.slice/user@1000.service/app.slice/ctun.service\n"
 PLAIN_CGROUP = "0::/user.slice/session-2.scope\n"

@@ -156,26 +156,37 @@ class DaemonHandle:
         self.port = port
         self.url = f"http://127.0.0.1:{port}/{TOKEN}/mcp"
         self.proc: subprocess.Popen | None = None
+        self.output_path = state / "daemon-output.log"
 
     def start(self) -> None:
         env = dict(os.environ,
                    CHATGPT_TUN_HOME=str(self.state),
                    PYTHONPATH=str(SRC))
-        self.proc = subprocess.Popen(
-            [sys.executable, "-m", "chatgpt_tun.daemon"],
-            env=env, cwd=str(REPO),
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            start_new_session=True,
-        )
+        with self.output_path.open("ab") as output:
+            self.proc = subprocess.Popen(
+                [sys.executable, "-m", "chatgpt_tun.daemon"],
+                env=env, cwd=str(REPO),
+                stdout=output, stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
         deadline = time.monotonic() + 20
         while time.monotonic() < deadline:
             if self.proc.poll() is not None:
-                raise AssertionError(f"daemon exited early with {self.proc.returncode}")
+                raise AssertionError(
+                    f"daemon exited early with {self.proc.returncode}; "
+                    f"log tail:\n{self.output_tail()}"
+                )
             with socket.socket() as probe:
                 if probe.connect_ex(("127.0.0.1", self.port)) == 0:
                     return
             time.sleep(0.1)
         raise AssertionError("daemon never opened its port")
+
+    def output_tail(self, limit: int = 4000) -> str:
+        try:
+            return self.output_path.read_text(errors="replace")[-limit:]
+        except OSError:
+            return ""
 
     def kill_hard(self) -> None:
         assert self.proc

@@ -98,7 +98,7 @@ def ngrok_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     handle = DaemonHandle(state, port)
     pids: list[int] = []
     try:
-        yield handle, state, trigger, pid_log, pids
+        yield handle, state, trigger, pid_log, pids, api_port
     finally:
         monkeypatch.delenv("CHATGPT_TUN_HOME", raising=False)
         handle.kill_group()
@@ -123,6 +123,25 @@ def read_runtime(state: Path) -> dict:
     return json.loads((state / "runtime.json").read_text())
 
 
+def diagnose(handle, state: Path, pid_log: Path, api_port: int) -> str:
+    """Everything needed to understand a stalled discovery on CI."""
+    try:
+        import urllib.request
+
+        with urllib.request.urlopen(
+                f"http://127.0.0.1:{api_port}/api/tunnels", timeout=2.0) as response:
+            api_from_test = response.read().decode()[:200]
+    except Exception as exc:  # noqa: BLE001 - diagnostics must not raise
+        api_from_test = f"unreachable from the test process: {exc!r}"
+    return (
+        f"\n--- runtime.json ---\n{read_runtime(state)}\n"
+        f"--- ngrok agent pids ---\n{logged_pids(pid_log)}\n"
+        f"--- tunnels API from the test process ---\n{api_from_test}\n"
+        f"--- daemon alive: {handle.proc is not None and handle.proc.poll() is None} ---\n"
+        f"--- daemon output tail ---\n{handle.output_tail()}\n"
+    )
+
+
 def logged_pids(pid_log: Path) -> list[int]:
     if not pid_log.exists():
         return []
@@ -132,12 +151,15 @@ def logged_pids(pid_log: Path) -> list[int]:
 def test_daemon_restarts_a_dead_ngrok_agent_and_rediscovers(ngrok_env):
     from conftest import mcp_call
 
-    handle, state, trigger, pid_log, pids = ngrok_env
+    handle, state, trigger, pid_log, pids, api_port = ngrok_env
     handle.start()
     pids.extend(wait_for(lambda: logged_pids(pid_log) or None, 10, "first ngrok agent"))
 
-    runtime = wait_for(lambda: read_runtime(state).get("ngrok_ready"), 35,
-                       "initial tunnel discovery")
+    try:
+        runtime = wait_for(lambda: read_runtime(state).get("ngrok_ready"), 35,
+                           "initial tunnel discovery")
+    except AssertionError:
+        raise AssertionError(diagnose(handle, state, pid_log, api_port))
     assert runtime is True
     assert read_runtime(state)["ngrok_pid"] == pids[0]
     assert read_runtime(state)["public_url"] == "https://fake-tunnel.example.org"
@@ -164,13 +186,16 @@ def test_daemon_restarts_a_dead_ngrok_agent_and_rediscovers(ngrok_env):
 
 
 def test_runtime_reports_the_outage_between_crash_and_recovery(ngrok_env):
-    handle, state, trigger, pid_log, pids = ngrok_env
+    handle, state, trigger, pid_log, pids, api_port = ngrok_env
     handle.start()
     pids.extend(wait_for(lambda: logged_pids(pid_log) or None, 10, "first ngrok agent"))
     wait_for(lambda: read_runtime(state).get("ngrok_ready"), 35, "initial discovery")
 
     trigger.write_text(str(pids[0]))
-    wait_for(lambda: logged_pids(pid_log)[1:], 20, "ngrok restart")
+    try:
+        wait_for(lambda: logged_pids(pid_log)[1:], 20, "ngrok restart")
+    except AssertionError:
+        raise AssertionError(diagnose(handle, state, pid_log, api_port))
 
     def saw_outage():
         try:
