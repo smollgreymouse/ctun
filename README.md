@@ -33,7 +33,7 @@ ctun daemon on 127.0.0.1:8765
 
 There is no tunnel per project. `ctun up` only changes the global project registry. The detached daemon and ngrok endpoint stay the same, so the ChatGPT connector URL does not change.
 
-## Install CTUN (v0.3.1)
+## Install CTUN (v0.3.4)
 
 Choose **one installation method**. Python libraries are included in binary packages;
 ngrok requires a separate account and one-time authorization.
@@ -262,6 +262,29 @@ ctun shutdown
 
 `ctun shutdown` stops the shared MCP daemon and ngrok process but preserves the project registry. A later `ctun up` automatically starts the gateway again.
 
+### Boot persistence and crash recovery (Linux, systemd)
+
+Install the user-level unit to keep the tunnel up across reboots and restart
+the daemon whenever its process dies:
+
+```bash
+cp packaging/linux/ctun.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now ctun
+sudo loginctl enable-linger $USER   # start at boot without an active login
+```
+
+The ngrok agent itself reconnects through network switches, Wi-Fi changes and
+airplane mode; the daemon additionally supervises the agent and restarts it
+with backoff if the process dies, reporting the outage in runtime state.
+
+When the unit runs the daemon, the CLI detects that via the process cgroup and
+routes the lifecycle commands through `systemctl --user` automatically:
+`ctun shutdown` stops the unit (it stays down), `ctun restart` and `ctun up`
+start it through systemd so the daemon is never a stray child. `ctun status`
+shows `managed by ctun.service` in that case. If systemd is unavailable the
+commands fall back to direct process management.
+
 ## Configuration and state
 
 By default all persistent runtime state lives under:
@@ -371,9 +394,12 @@ promise that arbitrary descendant processes were killed after an OS crash.
 On graceful gateway shutdown managed process groups are terminated. Commands
 should be designed to be retry-safe when recovering from unexpected crashes.
 
-The legacy `run_command` is unchanged. Streamable HTTP still uses stateless
-JSON responses; asynchronous jobs avoid holding an HTTP call open and do not
-require SSE/notification support in ChatGPT.
+The legacy `run_command` is unchanged, but it blocks the HTTP call until the
+command exits: the stock MCP client read timeout and ngrok's idle timeout cut
+such calls off at roughly five minutes. Anything that may run longer than a
+couple of minutes must go through `start_command`. Streamable HTTP still uses
+stateless JSON responses; asynchronous jobs avoid holding an HTTP call open and
+do not require SSE/notification support in ChatGPT.
 
 
 ## Packaging and release engineering

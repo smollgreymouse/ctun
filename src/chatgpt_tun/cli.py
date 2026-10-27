@@ -261,7 +261,7 @@ def build_parser() -> argparse.ArgumentParser:
     setup.add_argument("--wait", type=float, default=25.0, help="seconds to wait for ngrok")
     setup.set_defaults(func=cmd_setup)
 
-    up = sub.add_parser("up", aliases=["on"], help="Enable a project; defaults to the current directory")
+    up = sub.add_parser("up", aliases=["on"], help="Enable a project and start the gateway (via systemd when installed)")
     up.add_argument("path", nargs="?", default=".")
     up.add_argument("--name", help="override the project name (default: folder name)")
     up.add_argument("--wait", type=float, default=25.0, help="seconds to wait for ngrok")
@@ -287,10 +287,10 @@ def build_parser() -> argparse.ArgumentParser:
     url = sub.add_parser("url", help="Print the stable ChatGPT connector URL")
     url.set_defaults(func=cmd_url)
 
-    shutdown = sub.add_parser("shutdown", help="Stop the detached gateway and ngrok; registry is preserved")
+    shutdown = sub.add_parser("shutdown", help="Stop the gateway daemon and ngrok; via systemd when managed")
     shutdown.set_defaults(func=cmd_shutdown)
 
-    restart = sub.add_parser("restart", help="Restart the detached gateway and ngrok")
+    restart = sub.add_parser("restart", help="Restart the gateway daemon and ngrok; via systemd when managed")
     restart.add_argument("--wait", type=float, default=25.0)
     restart.set_defaults(func=cmd_restart)
 
