@@ -6,7 +6,10 @@ that is actually running on the machine.
 """
 from __future__ import annotations
 
+import asyncio
+import json
 import os
+import socket
 import subprocess
 import sys
 import time
@@ -133,3 +136,141 @@ def wait_dead(pid: int | None, limit: float = 5.0) -> bool:
 
 def python_code_snippet(code: str) -> list[str]:
     return [sys.executable, "-u", "-c", code]
+
+
+# --- Shared end-to-end daemon helpers (used by test_daemon_e2e and long-wait tests) ---
+
+REPO = Path(__file__).resolve().parents[1]
+TOKEN = "e2e-token"
+
+
+def free_port() -> int:
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        return probe.getsockname()[1]
+
+
+class DaemonHandle:
+    def __init__(self, state: Path, port: int):
+        self.state = state
+        self.port = port
+        self.url = f"http://127.0.0.1:{port}/{TOKEN}/mcp"
+        self.proc: subprocess.Popen | None = None
+
+    def start(self) -> None:
+        env = dict(os.environ,
+                   CHATGPT_TUN_HOME=str(self.state),
+                   PYTHONPATH=str(SRC))
+        self.proc = subprocess.Popen(
+            [sys.executable, "-m", "chatgpt_tun.daemon"],
+            env=env, cwd=str(REPO),
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline:
+            if self.proc.poll() is not None:
+                raise AssertionError(f"daemon exited early with {self.proc.returncode}")
+            with socket.socket() as probe:
+                if probe.connect_ex(("127.0.0.1", self.port)) == 0:
+                    return
+            time.sleep(0.1)
+        raise AssertionError("daemon never opened its port")
+
+    def kill_hard(self) -> None:
+        assert self.proc
+        os.killpg(os.getpgid(self.proc.pid), 9)
+        self.proc.wait(timeout=10)
+
+    def stop_graceful(self) -> int:
+        assert self.proc
+        self.proc.terminate()
+        try:
+            self.proc.wait(timeout=20)
+        except subprocess.TimeoutExpired:
+            os.killpg(os.getpgid(self.proc.pid), 9)
+            self.proc.wait(timeout=10)
+            raise AssertionError("daemon ignored SIGTERM")
+        return self.proc.returncode
+
+    def kill_group(self) -> None:
+        """Last-resort cleanup for whatever is still alive."""
+        if self.proc and self.proc.poll() is None:
+            try:
+                os.killpg(os.getpgid(self.proc.pid), 9)
+            except ProcessLookupError:
+                pass
+            self.proc.wait(timeout=10)
+
+
+def mcp_call(url: str, tool: str, arguments: dict, timeout: float = 30.0) -> dict:
+    from mcp import ClientSession
+    from mcp.client.streamable_http import streamable_http_client
+
+    async def run() -> dict:
+        async with streamable_http_client(url) as streams:
+            read, write = streams[0], streams[1]
+            async with ClientSession(read, write, read_timeout_seconds=timeout) as session:
+                await session.initialize()
+                result = await session.call_tool(tool, arguments, read_timeout_seconds=timeout)
+                if result.is_error:
+                    texts = [getattr(c, "text", str(c)) for c in result.content]
+                    raise AssertionError(f"{tool} failed: {texts}")
+                if result.structured_content is not None:
+                    return result.structured_content
+                return {"_content": [c.model_dump(mode="json") for c in result.content]}
+
+    return asyncio.run(run())
+
+
+def poll_status(url: str, project: str, job_id: str, limit: float = 20.0) -> dict:
+    deadline = time.monotonic() + limit
+    while time.monotonic() < deadline:
+        status = mcp_call(url, "get_command_status", {"project": project, "job_id": job_id})
+        if status["status"] not in ("starting", "running", "cancelling"):
+            return status
+        time.sleep(0.2)
+    raise AssertionError(f"job {job_id} did not settle within {limit}s")
+
+
+def kill_job_group(pid: int | None) -> None:
+    if not pid:
+        return
+    try:
+        os.killpg(os.getpgid(pid), 9)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
+@pytest.fixture
+def daemon_env(tmp_path: Path):
+    state = tmp_path / "state"
+    state.mkdir()
+    (state / "fake-ngrok").write_text("#!/bin/sh\nexec sleep 300\n")
+    (state / "fake-ngrok").chmod(0o755)
+    port = free_port()
+    (state / "config.json").write_text(json.dumps({
+        "version": 1, "host": "127.0.0.1", "port": port,
+        "ngrok_bin": str(state / "fake-ngrok"),
+        "public_url": None, "endpoint_token": TOKEN,
+    }), encoding="utf-8")
+
+    sys.path.insert(0, str(SRC))
+    from chatgpt_tun.registry import activate_project
+
+    project = tmp_path / "demo"
+    project.mkdir()
+    os.environ["CHATGPT_TUN_HOME"] = str(state)
+    activate_project(project)
+
+    orphans: list[int] = []
+    handle = DaemonHandle(state, port)
+    try:
+        yield handle, state, orphans
+    finally:
+        os.environ.pop("CHATGPT_TUN_HOME", None)
+        handle.kill_group()
+        for pid in orphans:
+            kill_job_group(pid)
+
+
