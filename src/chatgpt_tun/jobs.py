@@ -185,7 +185,10 @@ class JobManager:
         with (self.root / (ident + "." + stream)).open("wb") as fh:
             try:
                 while True:
-                    data = pipe.read(CHUNK)
+                    # read1 returns as soon as any bytes are available; read(n)
+                    # would block until the full chunk or EOF, so a long-running
+                    # command's progress would only appear in 64 KiB bursts.
+                    data = pipe.read1(CHUNK)
                     if not data:
                         break
                     allowed = max(0, MAX_LOG_BYTES - written)

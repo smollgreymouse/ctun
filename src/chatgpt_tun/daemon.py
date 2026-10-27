@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import atexit
 import os
+import signal
 import subprocess
 import threading
 from datetime import datetime, timezone
@@ -23,6 +24,22 @@ from .state import (
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _install_sigterm_handler() -> None:
+    """Turn SIGTERM into KeyboardInterrupt so the cleanup in main()'s
+    finally/atexit runs when the daemon is stopped with `ctun down` or
+    `ctun restart` (they signal with SIGTERM). Without this, uvicorn's
+    capture-and-reraise kills the process with the default disposition
+    after a graceful HTTP shutdown, skipping cleanup and leaking running
+    job processes."""
+    if os.name == "nt":
+        return
+
+    def handler(signum: int, frame: Any) -> None:
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGTERM, handler)
 
 
 def _terminate(process: subprocess.Popen[str] | None) -> None:
@@ -77,6 +94,7 @@ def _discover_tunnel(process: subprocess.Popen[str], initial_config: dict[str, A
 
 def main() -> int:
     pid = os.getpid()
+    _install_sigterm_handler()
     ngrok_process: subprocess.Popen[str] | None = None
     config = load_config()
 
