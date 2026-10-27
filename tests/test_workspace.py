@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -61,7 +62,7 @@ def test_disabled_project_is_inaccessible(project: Path) -> None:
 def test_run_command_uses_project_cwd(project: Path) -> None:
     result = run_command(
         "demo",
-        ["python", "-c", "import pathlib; print(pathlib.Path.cwd().name)"],
+        [sys.executable, "-c", "import pathlib; print(pathlib.Path.cwd().name)"],
         timeout=10,
     )
     assert result["returncode"] == 0
