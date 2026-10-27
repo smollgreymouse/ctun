@@ -60,7 +60,10 @@ def _terminate(process: subprocess.Popen[str] | None) -> None:
 
 def _discover_tunnel(process: subprocess.Popen[str], initial_config: dict[str, Any]) -> None:
     api_url = str(initial_config.get("ngrok_api_url") or "http://127.0.0.1:4040/api/tunnels")
-    actual = discover_public_url(timeout=25.0, api_url=api_url)
+    actual = discover_public_url(
+        timeout=25.0, api_url=api_url,
+        report=lambda exc: print("ngrok discovery:", exc, flush=True),
+    )
     if actual is None:
         code = process.poll()
         message = (

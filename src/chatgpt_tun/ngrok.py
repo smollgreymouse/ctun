@@ -7,7 +7,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 
 class NgrokError(RuntimeError):
@@ -69,7 +69,11 @@ def start_ngrok(config: dict[str, Any]) -> subprocess.Popen[str]:
     )
 
 
-def discover_public_url(timeout: float = 20.0, api_url: str = "http://127.0.0.1:4040/api/tunnels") -> str | None:
+def discover_public_url(
+    timeout: float = 20.0,
+    api_url: str = "http://127.0.0.1:4040/api/tunnels",
+    report: Callable[[str], None] | None = None,
+) -> str | None:
     # The agent API is loopback-only: system or environment proxies (macOS
     # reads them from System Configuration as well) must never intercept it.
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
@@ -82,7 +86,8 @@ def discover_public_url(timeout: float = 20.0, api_url: str = "http://127.0.0.1:
                 public_url = str(tunnel.get("public_url", ""))
                 if public_url.startswith("https://"):
                     return public_url.rstrip("/")
-        except (OSError, urllib.error.URLError, json.JSONDecodeError):
-            pass
+        except (OSError, urllib.error.URLError, json.JSONDecodeError) as exc:
+            if report:
+                report(repr(exc))
         time.sleep(0.25)
     return None

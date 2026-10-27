@@ -161,7 +161,8 @@ class DaemonHandle:
     def start(self) -> None:
         env = dict(os.environ,
                    CHATGPT_TUN_HOME=str(self.state),
-                   PYTHONPATH=str(SRC))
+                   PYTHONPATH=str(SRC),
+                   PYTHONUNBUFFERED="1")
         with self.output_path.open("ab") as output:
             self.proc = subprocess.Popen(
                 [sys.executable, "-m", "chatgpt_tun.daemon"],
